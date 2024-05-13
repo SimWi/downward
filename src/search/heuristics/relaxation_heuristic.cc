@@ -10,6 +10,8 @@
 #include <cstddef>
 #include <unordered_map>
 #include <vector>
+#include <fstream>
+#include <string>
 
 using namespace std;
 
@@ -37,8 +39,7 @@ UnaryOperator::UnaryOperator(
 // construction and destruction
 RelaxationHeuristic::RelaxationHeuristic(const plugins::Options &opts)
     : Heuristic(opts) {
-    // Build propositions.
-    propositions.resize(task_properties::get_num_facts(task_proxy));
+    parse_operators();
 
     // Build proposition offsets.
     VariablesProxy variables = task_proxy.get_variables();
@@ -48,7 +49,14 @@ RelaxationHeuristic::RelaxationHeuristic(const plugins::Options &opts)
         proposition_offsets.push_back(offset);
         offset += var.get_domain_size();
     }
-    assert(offset == static_cast<int>(propositions.size()));
+
+    // Build unary operators.
+    unary_operators.reserve(parsed_operators.size());
+    for (ParsedOperator op : parsed_operators)
+        build_unary_operators(op);
+
+    // Build propositions.
+    propositions.resize(num_existing_facts + new_propositions.size());
 
     // Build goal propositions.
     GoalsProxy goals = task_proxy.get_goals();
@@ -58,14 +66,6 @@ RelaxationHeuristic::RelaxationHeuristic(const plugins::Options &opts)
         propositions[prop_id].is_goal = true;
         goal_propositions.push_back(prop_id);
     }
-
-    // Build unary operators for operators and axioms.
-    unary_operators.reserve(
-        task_properties::get_num_total_effects(task_proxy));
-    for (OperatorProxy op : task_proxy.get_operators())
-        build_unary_operators(op);
-    for (OperatorProxy axiom : task_proxy.get_axioms())
-        build_unary_operators(axiom);
 
     // Simplify unary operators.
     utils::Timer simplify_timer;
@@ -104,6 +104,23 @@ PropID RelaxationHeuristic::get_prop_id(const FactProxy &fact) const {
     return get_prop_id(fact.get_variable().get_id(), fact.get_value());
 }
 
+PropID RelaxationHeuristic::get_prop_id(ParsedProposition &prop, bool set_id) {
+    auto iter = std::find(new_propositions.begin(), new_propositions.end(), prop);
+    if (iter != new_propositions.end()) {
+        ptrdiff_t pos = iter - new_propositions.begin();
+        prop.prop_id = new_propositions[pos].prop_id;
+        return prop.prop_id;
+    } else {
+        if (set_id) {
+            prop.prop_id = num_existing_facts + new_propositions.size();
+            new_propositions.push_back(prop);
+            return prop.prop_id;
+        } else {
+            return -1;
+        }
+    }
+}
+
 const Proposition *RelaxationHeuristic::get_proposition(
     int var, int value) const {
     return &propositions[get_prop_id(var, value)];
@@ -117,33 +134,84 @@ Proposition *RelaxationHeuristic::get_proposition(const FactProxy &fact) {
     return get_proposition(fact.get_variable().get_id(), fact.get_value());
 }
 
-void RelaxationHeuristic::build_unary_operators(const OperatorProxy &op) {
-    int op_no = op.is_axiom() ? -1 : op.get_id();
-    int base_cost = op.get_cost();
-    vector<PropID> precondition_props;
-    PreconditionsProxy preconditions = op.get_preconditions();
-    precondition_props.reserve(preconditions.size());
-    for (FactProxy precondition : preconditions) {
-        precondition_props.push_back(get_prop_id(precondition));
-    }
-    for (EffectProxy effect : op.get_effects()) {
-        PropID effect_prop = get_prop_id(effect.get_fact());
-        EffectConditionsProxy eff_conds = effect.get_conditions();
-        precondition_props.reserve(preconditions.size() + eff_conds.size());
-        for (FactProxy eff_cond : eff_conds) {
-            precondition_props.push_back(get_prop_id(eff_cond));
+void RelaxationHeuristic::parse_operators() {
+    std::ifstream operators_file;
+    operators_file.open("operators_relaxation_heuristic.txt");
+    std::string line;
+    if (operators_file.is_open()) {
+        operators_file >> num_existing_facts;
+        std::getline(operators_file, line);
+        std::getline(operators_file, line);
+        while (line != "end_operators") {
+            ParsedOperator o = ParsedOperator();
+            ParsedProposition effect;
+            ParsedProposition precondition;
+            effect = ParsedProposition();
+            effect.prop_name = line;
+            o.effect = effect;
+            std::getline(operators_file, line);
+            while (line != "cost") {
+                precondition = ParsedProposition();
+                precondition.prop_name = line;
+                o.preconditions.push_back(move(precondition));
+                std::getline(operators_file, line);
+            }
+            operators_file >> o.cost;
+            parsed_operators.push_back(move(o));
+            std::getline(operators_file, line);
+            std::getline(operators_file, line);
         }
-
-        // The sort-unique can eventually go away. See issue497.
-        vector<PropID> preconditions_copy(precondition_props);
-        utils::sort_unique(preconditions_copy);
-        array_pool::ArrayPoolIndex precond_index =
-            preconditions_pool.append(preconditions_copy);
-        unary_operators.emplace_back(
-            preconditions_copy.size(), precond_index, effect_prop,
-            op_no, base_cost);
-        precondition_props.erase(precondition_props.end() - eff_conds.size(), precondition_props.end());
+    } else {
+        std::cout << "Couldn't open file operators_relaxation_heuristic.txt\n";
     }
+}
+
+void RelaxationHeuristic::build_unary_operators(const ParsedOperator &op) {
+    int op_no = NO_OP;
+    int base_cost = op.cost;
+    bool use_original_fact = false;
+    vector<PropID> precondition_props;
+    precondition_props.reserve(op.preconditions.size());
+    for (ParsedProposition precondition : op.preconditions) {
+        for (FactProxy fact : FactsProxy(*task)) {
+            if (fact.get_name() == precondition.prop_name) {
+                precondition_props.push_back(get_prop_id(fact));
+                use_original_fact = true;
+                break;
+            }
+        }
+        if (!use_original_fact) {
+            if (get_prop_id(precondition, false) == -1) {
+                precondition.prop_id = get_prop_id(precondition, true);
+            }
+            precondition_props.push_back(precondition.prop_id);
+        }
+        use_original_fact = false;
+    }
+    PropID effect_prop;
+    ParsedProposition effect = op.effect;
+    for (FactProxy fact : FactsProxy(*task)) {
+        if (fact.get_name() == op.effect.prop_name) {
+            effect_prop = get_prop_id(fact);
+            use_original_fact = true;
+            break;
+        }
+    }
+    if (!use_original_fact) {
+        if (get_prop_id(effect, false) == -1) {
+            effect.prop_id = get_prop_id(effect, true);
+        }
+        effect_prop = effect.prop_id;
+    }
+
+    // The sort-unique can eventually go away. See issue497.
+    vector<PropID> preconditions_copy(precondition_props);
+    utils::sort_unique(preconditions_copy);
+    array_pool::ArrayPoolIndex precond_index =
+        preconditions_pool.append(preconditions_copy);
+    unary_operators.emplace_back(
+        preconditions_copy.size(), precond_index, effect_prop, op_no, base_cost);
+    precondition_props.clear();
 }
 
 void RelaxationHeuristic::simplify() {

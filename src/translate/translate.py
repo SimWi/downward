@@ -722,6 +722,14 @@ def main():
     sas_task = pddl_to_sas(task)
     dump_statistics(sas_task)
 
+    num_sas_task_facts = sum(sas_task.variables.ranges)
+    facts = defaultdict(list)
+    for values in sas_task.variables.value_names:
+        for value in values:
+            if "NegatedAtom" not in value:
+                facts[value.split()[1].split("(")[0]].append(value)
+    instantiate.compute_operators_for_relaxation_heuristic(task, num_sas_task_facts, facts)
+
     with timers.timing("Writing output"):
         with open(options.sas_file, "w") as output_file:
             sas_task.output(output_file)

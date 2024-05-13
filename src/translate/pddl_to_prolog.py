@@ -1,7 +1,9 @@
 #! /usr/bin/env python3
 
 
+import sys
 import itertools
+import copy
 
 import normalize
 import pddl
@@ -96,11 +98,159 @@ class PrologProgram:
             for rule_no in must_delete_rules[::-1]:
                 del self.rules[rule_no]
 
+    def remove_action_predicates(self, task):
+        '''
+        Remove the action predicates and restructure the Datalog program.
+        For example,
+
+        join action_a(?x, ?b) :- p(?x, ?b), r(?x).
+        project eff_1(?x) :- action_a(?x, ?b).
+        project eff_2(?b) :- action_a(?x, ?b).
+
+        becomes
+
+        join eff_1(?x) :- p(?x, ?b), r(?x).
+        join eff_2(?x) :- p(?x, ?b), r(?x).
+
+        This *needs* to be made before the renaming.
+        '''
+
+        non_action_rules = []
+        action_rules = dict()
+        costs = instantiate_costs(task)
+        for r in self.rules:
+            # Capture action rules and do not add them to the new set of rules
+            rule_name = str(r.effect)
+            if rule_name.startswith("Atom <Action"):
+                for action_id, cost in costs:
+                    if hex(action_id) in rule_name:
+                        r.weight = cost
+                action_rules[rule_name] = r
+            else:
+                non_action_rules.append(r)
+
+        final_rules = []
+        for r in non_action_rules:
+            if len(r.conditions) == 1:
+                condition_name = str(r.conditions[0])
+                if condition_name in action_rules.keys():
+                    new_action_rule = copy.deepcopy(action_rules[condition_name])
+                    new_action_rule.effect = r.effect
+                    final_rules.append(new_action_rule)
+                else:
+                    final_rules.append(r)
+            else:
+                final_rules.append(r)
+        self.rules = final_rules
+    
+    def rename_free_variables(self):
+        '''
+        Use canonical names for free variables. The names are based on the
+        order in
+        which the variables first show up and not on the PDDL file.
+        '''
+
+
+        def is_free_var(var, num):
+            if var[0] != '?':
+                return False, 0
+            if var not in parameter_to_generic_free_var.keys():
+                parameter_to_generic_free_var[var] = "?var" + str(num)
+                return True, 1
+            else:
+                return True, 0
+
+        new_rules = []
+        for r in self.rules:
+            rule = copy.deepcopy(r)
+            parameter_to_generic_free_var = dict()
+            num_free_vars = 0
+            new_effect = []
+            for index, e in enumerate(rule.effect.args):
+                is_free, increase = is_free_var(e, num_free_vars)
+                if is_free:
+                    new_effect.append(parameter_to_generic_free_var[e])
+                    num_free_vars += increase
+                else:
+                    new_effect.append(e)
+            rule.effect.args = tuple(new_effect)
+            for index, c in enumerate(rule.conditions):
+                new_condition = []
+                for a in c.args:
+                    is_free, increase = is_free_var(a, num_free_vars)
+                    if is_free:
+                        new_condition.append(parameter_to_generic_free_var[a])
+                        num_free_vars += increase
+                    else:
+                        new_condition.append(a)
+                rule.conditions[index].args = tuple(new_condition)
+            new_rules.append(rule)
+        self.rules = new_rules
+
+    def find_equivalent_rules(self, rules):
+        has_duplication = False
+        new_rules = []
+        remaining_equivalent_rules = dict()
+        equivalence = dict()
+        for rule in rules:
+            if "p$" in str(rule.effect):
+                '''Auxiliary variable'''
+                if (str(rule.conditions), str(rule.effect.args)) in remaining_equivalent_rules.keys():
+                    equivalence[str(rule.effect.predicate)] = remaining_equivalent_rules[(str(rule.conditions), str(rule.effect.args))]
+                    has_duplication = True
+                    continue
+                remaining_equivalent_rules[(str(rule.conditions), str(rule.effect.args))] = rule.effect.predicate
+            new_rules.append(rule)
+        return has_duplication, new_rules, equivalence
+
+    def remove_duplicated_rules(self):
+        '''
+        Remove redundant and duplicated rules from the IDB of the Datalog
+        '''
+        has_duplication = True
+        total_rules_removed = 0
+        while has_duplication:
+            number_removed = 0
+            final_rules = []
+            has_duplication, new_rules, equivalence = self.find_equivalent_rules(self.rules)
+            for rule in new_rules:
+                for i, c in enumerate(rule.conditions):
+                    pred_symb = str(c.predicate)
+                    if pred_symb in equivalence.keys():
+                        new_cond = c
+                        new_cond.predicate = equivalence[pred_symb]
+                        number_removed += 1
+                        #print("Replace %s by %s" % (pred_symb, equivalence[pred_symb]))
+                        rule.conditions[i] = new_cond
+                final_rules.append(rule)
+            total_rules_removed += number_removed
+            self.rules = final_rules
+        print("Total number of duplicated rules removed: %d" % total_rules_removed, file=sys.stderr)
+
 def get_variables(symbolic_atoms):
     variables = set()
     for sym_atom in symbolic_atoms:
         variables |= {arg for arg in sym_atom.args if arg[0] == "?"}
     return variables
+
+def instantiate_costs(task):
+        costs = []
+        init_assignments = {}
+        for element in task.init:
+            if isinstance(element, pddl.Assign):
+                init_assignments[element.fluent] = element.expression
+
+        for action in task.actions:
+                if task.use_min_cost_metric:
+                    if action.cost is None:
+                        cost = 0
+                    else:
+                        cost = int(action.cost.instantiate(
+                            None, init_assignments).expression.value)
+                else:
+                    cost = 1
+                costs.append([id(action), cost])
+        return costs
 
 class Fact:
     def __init__(self, atom):
@@ -109,9 +259,10 @@ class Fact:
         return "%s." % self.atom
 
 class Rule:
-    def __init__(self, conditions, effect):
+    def __init__(self, conditions, effect, weight=0):
         self.conditions = conditions
         self.effect = effect
+        self.weight = weight
     def add_condition(self, condition):
         self.conditions.append(condition)
     def get_variables(self):
@@ -174,10 +325,29 @@ def translate(task):
         prog.split_rules()
     return prog
 
+def translate_optimize(task):
+    prog = PrologProgram()
+    translate_facts(prog, task)
+    for conditions, effect in normalize.build_exploration_rules(task):
+        prog.add_rule(Rule(conditions, effect))
+    prog.remove_action_predicates(task)
+    prog.normalize()
+    prog.split_rules()
+    prog.rename_free_variables()
+    prog.remove_duplicated_rules()
+    return prog
 
 if __name__ == "__main__":
     import pddl_parser
     task = pddl_parser.open()
     normalize.normalize(task)
     prog = translate(task)
+    prog2 = translate_optimize(task)
     prog.dump()
+    with open("translate_optimize.txt", "w") as output_file:
+        for rule in prog2.rules:
+            print(getattr(rule, "type", "none"), rule.str_weighted(), file=output_file)
+    print("Number of rules (original):")
+    print(len(prog.rules))
+    print("Number of rules (new):")
+    print(len(prog2.rules))

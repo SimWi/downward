@@ -119,6 +119,92 @@ def explore(task):
         return instantiate(task, model)
 
 
+def instantiate_rule(variable_mapping, conditions, effect, model, facts, atoms):
+    if not conditions:
+        if model[effect.predicate]:
+            ground_operators = []
+            for atom in model[effect.predicate]:
+                if atom.predicate.startswith("p$") or (atom.predicate in facts and str(atom) in facts[atom.predicate]):
+                    effect_is_mapped = True
+                    for i in range(len(effect.args)):
+                        if effect.args[i][0] == "?":
+                            if effect.args[i] in variable_mapping:
+                                if variable_mapping[effect.args[i]] != atom.args[i]:
+                                    effect_is_mapped = False
+                                    break
+                        else:
+                            if effect.args[i] != atom.args[i]:
+                                effect_is_mapped = False
+                                break
+                    if effect_is_mapped:
+                        ground_operators.append((atom, atoms))
+            return ground_operators
+        return []
+    
+    current_condition = conditions[0]
+    if model[current_condition.predicate]:
+        result = []
+        for atom in model[current_condition.predicate]:
+            var_mapping = variable_mapping.copy()
+            is_mapped = True
+            for i in range(len(current_condition.args)):
+                if current_condition.args[i][0] == "?":
+                    if current_condition.args[i] in var_mapping:
+                        if var_mapping[current_condition.args[i]] != atom.args[i]:
+                            is_mapped = False
+                            break
+                    else:
+                        var_mapping[current_condition.args[i]] = atom.args[i]
+                else:
+                    if current_condition.args[i] != atom.args[i]:
+                        is_mapped = False
+                        break
+            if is_mapped:
+                if "type@" not in atom.predicate and (atom.predicate.startswith("p$") or (atom.predicate in facts and str(atom) in facts[atom.predicate])):
+                    r = instantiate_rule(var_mapping, conditions[1:], effect, model, facts, atoms + [atom])
+                else:
+                    r = instantiate_rule(var_mapping, conditions[1:], effect, model, facts, atoms)
+                if r:
+                    result = result + r
+        return result
+    return []
+
+def instantiate_for_relaxation_heuristic(prog: pddl_to_prolog.PrologProgram, model: Any, facts):
+    ground_operators = []
+    model_with_predicates = defaultdict(list)
+    with timers.timing("Building dictionary for model with predicates"):
+        for atom in model:
+            model_with_predicates[atom.predicate].append(atom)
+    with timers.timing("Completing instantiation of rules"):
+        for rule in prog.rules:
+            if "@goal-reachable" in rule.effect.predicate:
+                continue
+            result = instantiate_rule(variable_mapping={}, conditions=rule.conditions,
+                                effect=rule.effect, model=model_with_predicates, facts=facts, atoms=[])
+            if result:
+                for effect, conditions in result:
+                    ground_operators.append((effect, tuple(conditions), rule.weight))
+    return set(ground_operators)
+
+def compute_operators_for_relaxation_heuristic(task: pddl.Task, num_sas_task_facts: int, facts):
+    with timers.timing("Building rules"):
+        prog = pddl_to_prolog.translate_optimize(task)
+    model = build_model.compute_model(prog)
+    ground_operators = instantiate_for_relaxation_heuristic(prog, model, facts)
+    with timers.timing("Writing operators to output file"):
+        with open("operators_relaxation_heuristic.txt", "w") as output_file:
+            output(num_sas_task_facts, ground_operators, output_file)
+
+def output(num_sas_task_facts: int, operators, output_file):
+    print(num_sas_task_facts, file=output_file)
+    for operator in operators:
+        print(operator[0], file=output_file)
+        for precondition in operator[1]:
+            print(precondition, file=output_file)
+        print("cost", file=output_file)
+        print(operator[2], file=output_file)
+    print("end_operators", file=output_file)
+
 if __name__ == "__main__":
     import pddl_parser
     task = pddl_parser.open()

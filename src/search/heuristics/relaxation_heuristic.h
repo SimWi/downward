@@ -16,6 +16,8 @@ class OperatorProxy;
 namespace relaxation_heuristic {
 struct Proposition;
 struct UnaryOperator;
+struct ParsedProposition;
+struct ParsedOperator;
 
 using PropID = int;
 using OpID = int;
@@ -54,15 +56,33 @@ struct UnaryOperator {
 
 static_assert(sizeof(UnaryOperator) == 28, "UnaryOperator has wrong size");
 
+struct ParsedProposition {
+    PropID prop_id;
+    std::string prop_name;
+    bool operator==(const ParsedProposition &other) const {
+        return prop_name == other.prop_name;
+    }
+};
+
+struct ParsedOperator {
+    int cost;
+    ParsedProposition effect;
+    std::vector<ParsedProposition> preconditions;
+};
+
 class RelaxationHeuristic : public Heuristic {
-    void build_unary_operators(const OperatorProxy &op);
+    void parse_operators();
+    void build_unary_operators(const ParsedOperator &op);
     void simplify();
 
     // proposition_offsets[var_no]: first PropID related to variable var_no
     std::vector<PropID> proposition_offsets;
 protected:
+    int num_existing_facts;
+    std::vector<ParsedOperator> parsed_operators;
     std::vector<UnaryOperator> unary_operators;
     std::vector<Proposition> propositions;
+    std::vector<ParsedProposition> new_propositions;
     std::vector<PropID> goal_propositions;
 
     array_pool::ArrayPool preconditions_pool;
@@ -98,6 +118,7 @@ protected:
 
     PropID get_prop_id(int var, int value) const;
     PropID get_prop_id(const FactProxy &fact) const;
+    PropID get_prop_id(ParsedProposition &prop, bool set_id);
 
     Proposition *get_proposition(PropID prop_id) {
         return &propositions[prop_id];
