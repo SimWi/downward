@@ -162,7 +162,7 @@ void RelaxationHeuristic::parse_operators() {
             std::getline(operators_file, line);
         }
     } else {
-        std::cout << "Couldn't open file operators_relaxation_heuristic.txt\n";
+        std::cout << "Couldn't open file operators_relaxation_heuristic.txt" << std::endl;
     }
 }
 

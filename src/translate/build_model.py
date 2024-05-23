@@ -20,7 +20,7 @@ def convert_rules(prog):
         new_effect, new_conditions = variables_to_numbers(
             rule.effect, rule.conditions)
         rule = RuleType(new_effect, new_conditions)
-        rule.validate()
+        #rule.validate()
         result.append(rule)
     return result
 

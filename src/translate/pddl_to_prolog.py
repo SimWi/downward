@@ -36,7 +36,11 @@ class PrologProgram:
         # 3. There are no rules with empty condition.
         self.remove_free_effect_variables()
         self.split_duplicate_arguments()
-        self.convert_trivial_rules()
+        # Allow rules with empty condition for operators of optimized hadd.
+        #self.convert_trivial_rules()
+        for rule in self.rules:
+            if not rule.conditions:
+                self.add_fact(rule.effect)
     def split_rules(self):
         import split_rules
         # Splits rules whose conditions can be partitioned in such a way that
@@ -289,6 +293,9 @@ class Rule:
                     condition, extra_conditions))
         self.conditions += extra_conditions
         return bool(extra_conditions)
+    def str_weighted(self):
+        cond_str = ", ".join(map(str, self.conditions))
+        return "%s :- %s [%s]." % (self.effect, cond_str, self.weight)
     def __str__(self):
         cond_str = ", ".join(map(str, self.conditions))
         return "%s :- %s." % (self.effect, cond_str)

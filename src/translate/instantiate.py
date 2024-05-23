@@ -160,7 +160,7 @@ def instantiate_rule(variable_mapping, conditions, effect, model, facts, atoms):
                         is_mapped = False
                         break
             if is_mapped:
-                if "type@" not in atom.predicate and (atom.predicate.startswith("p$") or (atom.predicate in facts and str(atom) in facts[atom.predicate])):
+                if "@" not in atom.predicate and (atom.predicate.startswith("p$") or (atom.predicate in facts and str(atom) in facts[atom.predicate])):
                     r = instantiate_rule(var_mapping, conditions[1:], effect, model, facts, atoms + [atom])
                 else:
                     r = instantiate_rule(var_mapping, conditions[1:], effect, model, facts, atoms)
