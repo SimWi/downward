@@ -186,10 +186,16 @@ def instantiate_for_relaxation_heuristic(prog: pddl_to_prolog.PrologProgram, mod
                     ground_operators.append((effect, tuple(conditions), rule.weight))
     return set(ground_operators)
 
-def compute_operators_for_relaxation_heuristic(task: pddl.Task, num_sas_task_facts: int, facts):
+def compute_operators_for_relaxation_heuristic(task: pddl.Task, num_sas_task_facts: int):
     with timers.timing("Building rules"):
         prog = pddl_to_prolog.translate_optimize(task)
     model = build_model.compute_model(prog)
+
+    facts = defaultdict(list)
+    for elem in get_fluent_facts(task, model):
+        name = str(elem)
+        if "NegatedAtom" not in name:
+            facts[name.split()[1].split("(")[0]].append(name)
     ground_operators = instantiate_for_relaxation_heuristic(prog, model, facts)
     with timers.timing("Writing operators to output file"):
         with open("operators_relaxation_heuristic.txt", "w") as output_file:
