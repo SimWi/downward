@@ -119,12 +119,12 @@ def explore(task):
         return instantiate(task, model)
 
 
-def instantiate_rule(variable_mapping, conditions, effect, model, facts, atoms):
+def instantiate_rule(original_fluent_facts, variable_mapping, conditions, effect, model, variables_values, atoms):
     if not conditions:
         if model[effect.predicate]:
             ground_operators = []
             for atom in model[effect.predicate]:
-                if atom.predicate.startswith("p$") or (atom.predicate in facts and str(atom) in facts[atom.predicate]):
+                if atom.predicate.startswith("p$") or (atom.predicate in variables_values and str(atom) in variables_values[atom.predicate]):
                     effect_is_mapped = True
                     for i in range(len(effect.args)):
                         if effect.args[i][0] == "?":
@@ -160,43 +160,51 @@ def instantiate_rule(variable_mapping, conditions, effect, model, facts, atoms):
                         is_mapped = False
                         break
             if is_mapped:
-                if "@" not in atom.predicate and (atom.predicate.startswith("p$") or (atom.predicate in facts and str(atom) in facts[atom.predicate])):
-                    r = instantiate_rule(var_mapping, conditions[1:], effect, model, facts, atoms + [atom])
+                r = None
+                if "@" not in atom.predicate and (atom.predicate.startswith("p$") or (atom.predicate in variables_values and str(atom) in variables_values[atom.predicate])):
+                    r = instantiate_rule(original_fluent_facts, var_mapping, conditions[1:], effect, model, variables_values, atoms + [atom])
+                elif original_fluent_facts[atom.predicate] and atom not in original_fluent_facts[atom.predicate]:
+                    continue
                 else:
-                    r = instantiate_rule(var_mapping, conditions[1:], effect, model, facts, atoms)
+                    r = instantiate_rule(original_fluent_facts, var_mapping, conditions[1:], effect, model, variables_values, atoms)
                 if r:
                     result = result + r
         return result
     return []
 
-def instantiate_for_relaxation_heuristic(prog: pddl_to_prolog.PrologProgram, model: Any, facts):
+def instantiate_for_relaxation_heuristic(prog: pddl_to_prolog.PrologProgram, model: Any, variables_values, original_fluent_facts):
     ground_operators = []
     model_with_predicates = defaultdict(list)
+    original_fluent_facts_with_predicates = defaultdict(list)
     with timers.timing("Building dictionary for model with predicates"):
         for atom in model:
             model_with_predicates[atom.predicate].append(atom)
+    with timers.timing("Building dictionary for original fluent facts with predicates"):
+        for atom in original_fluent_facts:
+            original_fluent_facts_with_predicates[atom.predicate].append(atom)
     with timers.timing("Completing instantiation of rules"):
         for rule in prog.rules:
             if "@goal-reachable" in rule.effect.predicate:
                 continue
-            result = instantiate_rule(variable_mapping={}, conditions=rule.conditions,
-                                effect=rule.effect, model=model_with_predicates, facts=facts, atoms=[])
+            result = instantiate_rule(original_fluent_facts_with_predicates, variable_mapping={}, conditions=rule.conditions,
+                                effect=rule.effect, model=model_with_predicates, variables_values=variables_values, atoms=[])
             if result:
                 for effect, conditions in result:
                     ground_operators.append((effect, tuple(conditions), rule.weight))
     return set(ground_operators)
 
-def compute_operators_for_relaxation_heuristic(task: pddl.Task, num_sas_task_facts: int):
+def compute_operators_for_relaxation_heuristic(task: pddl.Task, sas_task, original_fluent_facts):
     with timers.timing("Building rules"):
         prog = pddl_to_prolog.translate_optimize(task)
     model = build_model.compute_model(prog)
 
-    facts = defaultdict(list)
-    for elem in get_fluent_facts(task, model):
-        name = str(elem)
-        if "NegatedAtom" not in name:
-            facts[name.split()[1].split("(")[0]].append(name)
-    ground_operators = instantiate_for_relaxation_heuristic(prog, model, facts)
+    variables_values = defaultdict(list)
+    for values in sas_task.variables.value_names:
+        for value in values:
+            if "NegatedAtom" not in value:
+                variables_values[value.split()[1].split("(")[0]].append(value)
+    ground_operators = instantiate_for_relaxation_heuristic(prog, model, variables_values, original_fluent_facts)
+    num_sas_task_facts = sum(sas_task.variables.ranges)
     with timers.timing("Writing operators to output file"):
         with open("operators_relaxation_heuristic.txt", "w") as output_file:
             output(num_sas_task_facts, ground_operators, output_file)
