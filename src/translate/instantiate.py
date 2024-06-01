@@ -204,13 +204,11 @@ def compute_operators_for_relaxation_heuristic(task: pddl.Task, sas_task, origin
             if "NegatedAtom" not in value:
                 variables_values[value.split()[1].split("(")[0]].append(value)
     ground_operators = instantiate_for_relaxation_heuristic(prog, model, variables_values, original_fluent_facts)
-    num_sas_task_facts = sum(sas_task.variables.ranges)
     with timers.timing("Writing operators to output file"):
         with open("operators_relaxation_heuristic.txt", "w") as output_file:
-            output(num_sas_task_facts, ground_operators, output_file)
+            output(ground_operators, output_file)
 
-def output(num_sas_task_facts: int, operators, output_file):
-    print(num_sas_task_facts, file=output_file)
+def output(operators, output_file):
     for operator in operators:
         print(operator[0], file=output_file)
         for precondition in operator[1]:

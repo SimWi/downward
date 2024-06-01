@@ -39,6 +39,7 @@ UnaryOperator::UnaryOperator(
 // construction and destruction
 RelaxationHeuristic::RelaxationHeuristic(const plugins::Options &opts)
     : Heuristic(opts) {
+    num_existing_facts = task_properties::get_num_facts(task_proxy);
     parse_operators();
 
     // Build proposition offsets.
@@ -139,8 +140,6 @@ void RelaxationHeuristic::parse_operators() {
     operators_file.open("operators_relaxation_heuristic.txt");
     std::string line;
     if (operators_file.is_open()) {
-        operators_file >> num_existing_facts;
-        std::getline(operators_file, line);
         std::getline(operators_file, line);
         while (line != "end_operators") {
             ParsedOperator o = ParsedOperator();
