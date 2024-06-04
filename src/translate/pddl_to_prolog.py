@@ -256,6 +256,12 @@ def instantiate_costs(task):
                 costs.append([id(action), cost])
         return costs
 
+def remove_duplicate_preconditions_in_actions(task):
+    for action in task.actions:
+        if isinstance(action.precondition, pddl.Conjunction):
+            action.precondition.parts = tuple([condition for index, condition in enumerate(action.precondition.parts) 
+                                               if condition not in action.precondition.parts[:index]])
+
 class Fact:
     def __init__(self, atom):
         self.atom = atom
@@ -333,6 +339,7 @@ def translate(task):
     return prog
 
 def translate_optimize(task):
+    remove_duplicate_preconditions_in_actions(task)
     prog = PrologProgram()
     translate_facts(prog, task)
     for conditions, effect in normalize.build_exploration_rules(task):
