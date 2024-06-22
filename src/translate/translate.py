@@ -620,7 +620,7 @@ def pddl_to_sas(task):
                 sas_task, options.reorder_variables,
                 options.filter_unimportant_vars)
 
-    return sas_task, atoms
+    return sas_task
 
 
 def build_mutex_key(strips_to_sas, groups):
@@ -719,10 +719,10 @@ def main():
                 if effect.literal.negated:
                     del action.effects[index]
 
-    sas_task, original_fluent_facts = pddl_to_sas(task)
+    sas_task = pddl_to_sas(task)
     dump_statistics(sas_task)
 
-    instantiate.compute_operators_for_relaxation_heuristic(task, sas_task, original_fluent_facts)
+    instantiate.compute_operators_for_relaxation_heuristic(task, sas_task)
 
     with timers.timing("Writing output"):
         with open(options.sas_file, "w") as output_file:
