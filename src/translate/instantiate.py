@@ -163,9 +163,7 @@ def instantiate_rule(initial_facts, variable_mapping, conditions, effect, model,
                 r = None
                 if "@" not in atom.predicate and (atom.predicate.startswith("p$") or (atom.predicate in variables_values and str(atom) in variables_values[atom.predicate])):
                     r = instantiate_rule(initial_facts, var_mapping, conditions[1:], effect, model, variables_values, atoms + [atom])
-                elif initial_facts[atom.predicate] and atom not in initial_facts[atom.predicate]:
-                    continue
-                else:
+                elif atom in initial_facts[atom.predicate] or "@" in atom.predicate:
                     r = instantiate_rule(initial_facts, var_mapping, conditions[1:], effect, model, variables_values, atoms)
                 if r:
                     result = result + r
